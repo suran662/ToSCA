@@ -234,6 +234,7 @@ def train(args):
         kl_target=args.kl_target,
         ema_beta=0.992,
         ptx_coef=args.ptx_coef,
+        ppl_coef=args.ppl_coef,
         max_norm=args.max_norm,
         # fro GPT generation
         do_sample=True,
@@ -290,6 +291,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_norm", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--l2", type=float, default=0.0, help="weight decay loss")
     parser.add_argument("--ptx_coef", type=float, default=0.05, help="PPO-ptx loss coef")
+    parser.add_argument("--ppl_coef", type=float, default=0.0, help="PPL loss coefficient for HRL lower layer")
     parser.add_argument("--eps_clip", type=float, default=0.2, help="PPO clip range")
     parser.add_argument("--value_clip", type=float, default=0.2, help="PPO value clip range")
     parser.add_argument("--lambd", type=float, default=0.95, help="PPO GAE lambd")

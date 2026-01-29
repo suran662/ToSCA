@@ -11,7 +11,7 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
-from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
+from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss, PPLLoss
 from openrlhf.models.utils import masked_mean
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
@@ -61,6 +61,7 @@ class PPOTrainer(ABC):
         kl_target: float = None,
         kl_horizon: int = 10000,
         ptx_coef: float = 0,
+        ppl_coef: float = 0,
         micro_train_batch_size: int = 8,
         buffer_limit: int = 0,
         buffer_cpu_offload: bool = True,
@@ -90,6 +91,7 @@ class PPOTrainer(ABC):
         self.dataloader_pin_memory = dataloader_pin_memory
         self.max_norm = max_norm
         self.ptx_coef = ptx_coef
+        self.ppl_coef = ppl_coef
         self.micro_train_batch_size = micro_train_batch_size
         self.kl_target = kl_target
         self.prompt_max_len = prompt_max_len
@@ -110,6 +112,7 @@ class PPOTrainer(ABC):
         self.actor_loss_fn = PolicyLoss(eps_clip)
         self.critic_loss_fn = ValueLoss(value_clip)
         self.ptx_loss_fn = GPTLMLoss()
+        self.ppl_loss_fn = PPLLoss(coefficient=ppl_coef) if ppl_coef > 0 else None
 
         self.freezing_actor_steps = getattr(self.args, "freezing_actor_steps", -1)
 
@@ -350,12 +353,21 @@ class PPOTrainer(ABC):
             experience.advantages,
             action_mask=experience.action_mask,
         )
+        
+        # PPL loss for HRL lower layer: log(∏ P(token)) × coefficient
+        if self.ppl_loss_fn is not None and self.ppl_coef > 0:
+            ppl_loss = self.ppl_loss_fn(action_log_probs, experience.action_mask)
+        else:
+            ppl_loss = 0
+        
         # mixtral
         if self.aux_loss:
             aux_loss = output.aux_loss
         else:
             aux_loss = 0
-        loss = actor_loss + aux_loss * self.args.aux_loss_coef
+        
+        # Total actor loss: policy loss + PPL loss + auxiliary loss
+        loss = actor_loss + ppl_loss + aux_loss * self.args.aux_loss_coef
         self.strategy.backward(loss, self.actor, self.actor_optim)
 
         # ptx loss
@@ -390,6 +402,8 @@ class PPOTrainer(ABC):
         status = {
             "policy_loss": actor_loss.item(),
         }
+        if self.ppl_loss_fn is not None and self.ppl_coef > 0:
+            status["ppl_loss"] = ppl_loss.item() if isinstance(ppl_loss, torch.Tensor) else ppl_loss
         if self.pretrain_dataloader is not None:
             status["ptx_loss"] = ptx_loss.item()
         for k, v in experience.info.items():

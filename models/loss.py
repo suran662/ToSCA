@@ -246,3 +246,38 @@ class KDLoss(nn.Module):
         distil_loss = -torch.sum(x * mask.view(-1), dim=0) / torch.sum(mask.view(-1), dim=0)
 
         return distil_loss
+
+
+class PPLLoss(nn.Module):
+    """
+    Perplexity-based Loss for HRL Lower Layer
+    Computes log(∏ P(token)) × coefficient = sum(log P(token)) × coefficient
+    This encourages the model to maintain language modeling quality during RL fine-tuning.
+    """
+
+    def __init__(self, coefficient: float = 1.0):
+        super().__init__()
+        self.coefficient = coefficient
+
+    def forward(
+        self,
+        log_probs: torch.Tensor,
+        action_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            log_probs: Log probabilities of generated tokens, shape (batch_size, seq_len)
+            action_mask: Mask for valid actions, shape (batch_size, seq_len)
+        
+        Returns:
+            PPL loss: sum of log probabilities multiplied by coefficient
+        """
+        # Sum log probabilities (equivalent to log of product of probabilities)
+        if action_mask is not None:
+            # Only consider valid actions
+            ppl_loss = masked_mean(log_probs, action_mask, dim=-1).mean()
+        else:
+            ppl_loss = log_probs.mean()
+        
+        # Multiply by coefficient and negate (since we want to maximize log probs, i.e., minimize negative log probs)
+        return -self.coefficient * ppl_loss
